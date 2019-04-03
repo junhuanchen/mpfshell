@@ -23,6 +23,8 @@
 ##
 
 
-FULL = '0.9.0'
+MAJOR = 0
+MINOR = 8
+PATCH = 6
 
-MAJOR, MINOR, PATCH = FULL.split(".")
+FULL = "%d.%d.%d" % (MAJOR, MINOR, PATCH)

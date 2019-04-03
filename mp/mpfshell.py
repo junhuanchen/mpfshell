@@ -23,70 +23,70 @@
 ##
 
 
-import tempfile
-import argparse
-import cmd
-import glob
 import io
-import logging
+import cmd
 import os
-import platform
+import argparse
+import glob
 import sys
-
-import colorama
 import serial
+import logging
+import platform
+import time
+
 from mp import version
-from mp.conbase import ConError
-from mp.mpfexp import MpFileExplorer, MpFileExplorerCaching, RemoteIOError
+from mp.mpfexp import MpFileExplorer
+from mp.mpfexp import MpFileExplorerCaching
+from mp.mpfexp import RemoteIOError
 from mp.pyboard import PyboardError
+from mp.conbase import ConError
 from mp.tokenizer import Tokenizer
 
 
 class MpFileShell(cmd.Cmd):
-    def __init__(self, color=False, caching=False, reset=False):
-        if color:
-            colorama.init()
-            cmd.Cmd.__init__(self, stdout=colorama.initialise.wrapped_stdout)
-        else:
-            cmd.Cmd.__init__(self)
 
-        if platform.system() == "Windows":
-            self.use_rawinput = False
+    def __init__(self, color=False, caching=False, reset=False, help=False):
+        cmd.Cmd.__init__(self)
 
         self.color = color
         self.caching = caching
         self.reset = reset
-
+        self.open_args = None
         self.fe = None
         self.repl = None
         self.tokenizer = Tokenizer()
 
+        if platform.system() == 'Windows':
+            self.use_rawinput = False
+
+        if platform.system() == 'Darwin':
+            self.reset = True
+
         self.__intro()
         self.__set_prompt_path()
+
+        if help is False:
+            self.do_help(None)
+            print("can input help ls or other command if you don't know how to use it.")
+
+            plist = self.all_serial()
+            if len(plist) <= 0:
+                print("serial not found!")
+            else:
+                for serial in plist:
+                    print("serial name :", serial[1], " : ", serial[0].split('/')[-1])
+                print("input ' open", plist[len(plist) - 1][0].split('/')[-1], "' and enter connect your board.")
+            
 
     def __del__(self):
         self.__disconnect()
 
     def __intro(self):
 
-        if self.color:
-            self.intro = (
-                "\n"
-                + colorama.Fore.GREEN
-                + "** Micropython File Shell v%s, sw@kaltpost.de ** " % version.FULL
-                + colorama.Fore.RESET
-                + "\n"
-            )
-        else:
-            self.intro = (
-                "\n** Micropython File Shell v%s, sw@kaltpost.de **\n" % version.FULL
-            )
+        self.intro = '\n** Micropython File Shell v%s, sw@kaltpost.de & juwan@banana-pi.com **\n' % version.FULL
 
-        self.intro += "-- Running on Python %d.%d using PySerial %s --\n" % (
-            sys.version_info[0],
-            sys.version_info[1],
-            serial.VERSION,
-        )
+        self.intro += '-- Running on Python %d.%d using PySerial %s --\n' \
+                      % (sys.version_info[0], sys.version_info[1], serial.VERSION)
 
     def __set_prompt_path(self):
 
@@ -95,33 +95,20 @@ class MpFileShell(cmd.Cmd):
         else:
             pwd = "/"
 
-        if self.color:
-            self.prompt = (
-                colorama.Fore.BLUE
-                + "mpfs ["
-                + colorama.Fore.YELLOW
-                + pwd
-                + colorama.Fore.BLUE
-                + "]> "
-                + colorama.Fore.RESET
-            )
-        else:
-            self.prompt = "mpfs [" + pwd + "]> "
+        self.prompt = "mpfs [" + pwd + "]> "
 
     def __error(self, msg):
 
-        if self.color:
-            print("\n" + colorama.Fore.RED + msg + colorama.Fore.RESET + "\n")
-        else:
-            print("\n" + msg + "\n")
+        print('\n' + msg + '\n')
 
-    def __connect(self, port):
+    def __connect(self, port, reconnect=False):
 
         try:
             self.__disconnect()
-
-            if self.reset:
-                print("Hard resetting device ...")
+            if (port is None):
+                port = self.open_args
+            # if self.reset:
+            #     print("Hard resetting device ...")
             if self.caching:
                 self.fe = MpFileExplorerCaching(port, self.reset)
             else:
@@ -137,6 +124,21 @@ class MpFileShell(cmd.Cmd):
         except AttributeError as e:
             logging.error(e)
             self.__error("Failed to open: %s" % port)
+        except Exception as e:
+            print(e)
+
+        if reconnect and self.__is_open() == False:
+            time.sleep(3)
+            self.__connect(None)
+
+    def __reconnect(self):
+        import time
+        for a in range(3):
+            self.__connect(None)
+            if self.__is_open():
+                break
+            print('try reconnect... ')
+            time.sleep(3)
 
     def __disconnect(self):
 
@@ -147,6 +149,8 @@ class MpFileShell(cmd.Cmd):
                 self.__set_prompt_path()
             except RemoteIOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def __is_open(self):
 
@@ -160,25 +164,55 @@ class MpFileShell(cmd.Cmd):
 
         tokens, rest = self.tokenizer.tokenize(args)
 
-        if rest != "":
+        if rest != '':
             self.__error("Invalid filename given: %s" % rest)
         else:
             return [token.value for token in tokens]
 
         return None
 
-    def do_exit(self, args):
-        """exit
+    def all_serial(self):
+        import serial.tools.list_ports
+        print("looking for all port...")
+        plist = list(serial.tools.list_ports.comports())
+        return plist
+        
+    def do_view(self, args):
+        """view(v)
+        view all serial.
+        """
+        plist = self.all_serial()
+        if len(plist) <= 0:
+            print("serial not found!")
+        else:
+            for serial in plist:
+                print("serial name :", serial[1], " : ", serial[0].split('/')[-1])
+
+        if self.open_args:
+            print("current open_args", self.open_args)
+
+
+    def do_v(self, args):
+        return self.do_view(args)
+
+    def do_q(self, args):
+        return self.do_quit(args)
+
+    def do_quit(self, args):
+        """quit(q)
         Exit this shell.
         """
         self.__disconnect()
 
         return True
 
-    do_EOF = do_exit
+    do_EOF = do_quit
+
+    def do_o(self, args):
+        return self.do_open(args)
 
     def do_open(self, args):
-        """open <TARGET>
+        """open(o) <TARGET>
         Open connection to device with given target. TARGET might be:
 
         - a serial port, e.g.       ttyUSB0, ser:/dev/ttyUSB0
@@ -189,22 +223,24 @@ class MpFileShell(cmd.Cmd):
         if not len(args):
             self.__error("Missing argument: <PORT>")
         else:
-            if (
-                not args.startswith("ser:/dev/")
-                and not args.startswith("ser:COM")
-                and not args.startswith("tn:")
-                and not args.startswith("ws:")
-            ):
+            if not args.startswith("ser:/dev/") \
+                    and not args.startswith("ser:COM") \
+                    and not args.startswith("tn:") \
+                    and not args.startswith("ws:"):
 
                 if platform.system() == "Windows":
+                    args = "ser:" + args
+                elif '/dev' in args:
                     args = "ser:" + args
                 else:
                     args = "ser:/dev/" + args
 
+            self.open_args = args
+
             self.__connect(args)
 
     def complete_open(self, *args):
-        ports = glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*")
+        ports = glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*')
         return [i[5:] for i in ports if i[5:].startswith(args[0])]
 
     def do_close(self, args):
@@ -229,29 +265,17 @@ class MpFileShell(cmd.Cmd):
                 print("\nRemote files in '%s':\n" % self.fe.pwd())
 
                 for elem, type in files:
-                    if type == "F":
-                        if self.color:
-                            print(
-                                colorama.Fore.CYAN
-                                + ("       %s" % elem)
-                                + colorama.Fore.RESET
-                            )
-                        else:
-                            print("       %s" % elem)
+                    if type == 'F':
+                        print("       %s" % elem)
                     else:
-                        if self.color:
-                            print(
-                                colorama.Fore.MAGENTA
-                                + (" <dir> %s" % elem)
-                                + colorama.Fore.RESET
-                            )
-                        else:
-                            print(" <dir> %s" % elem)
+                        print(" <dir> %s" % elem)
 
                 print("")
 
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def do_pwd(self, args):
         """pwd
@@ -279,6 +303,8 @@ class MpFileShell(cmd.Cmd):
                 self.__set_prompt_path()
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def complete_cd(self, *args):
 
@@ -307,6 +333,8 @@ class MpFileShell(cmd.Cmd):
                 self.fe.md(s_args[0])
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def do_lls(self, args):
         """lls
@@ -319,18 +347,10 @@ class MpFileShell(cmd.Cmd):
 
         for f in files:
             if os.path.isdir(f):
-                if self.color:
-                    print(
-                        colorama.Fore.MAGENTA + (" <dir> %s" % f) + colorama.Fore.RESET
-                    )
-                else:
-                    print(" <dir> %s" % f)
+                print(" <dir> %s" % f)
         for f in files:
             if os.path.isfile(f):
-                if self.color:
-                    print(colorama.Fore.CYAN + ("       %s" % f) + colorama.Fore.RESET)
-                else:
-                    print("       %s" % f)
+                print("       %s" % f)
         print("")
 
     def do_lcd(self, args):
@@ -352,6 +372,8 @@ class MpFileShell(cmd.Cmd):
                 os.chdir(s_args[0])
             except OSError as e:
                 self.__error(str(e).split("] ")[-1])
+            except Exception as e:
+                print(e)
 
     def complete_lcd(self, *args):
         dirs = [o for o in os.listdir(".") if os.path.isdir(os.path.join(".", o))]
@@ -380,9 +402,7 @@ class MpFileShell(cmd.Cmd):
             if not s_args:
                 return
             elif len(s_args) > 2:
-                self.__error(
-                    "Only one ore two arguments allowed: <LOCAL FILE> [<REMOTE FILE>]"
-                )
+                self.__error("Only one ore two arguments allowed: <LOCAL FILE> [<REMOTE FILE>]")
                 return
 
             lfile_name = s_args[0]
@@ -391,11 +411,12 @@ class MpFileShell(cmd.Cmd):
                 rfile_name = s_args[1]
             else:
                 rfile_name = lfile_name
-
             try:
                 self.fe.put(lfile_name, rfile_name)
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def complete_put(self, *args):
         files = [o for o in os.listdir(".") if os.path.isfile(os.path.join(".", o))]
@@ -418,6 +439,8 @@ class MpFileShell(cmd.Cmd):
                 self.fe.mput(os.getcwd(), args, True)
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def do_get(self, args):
         """get <REMOTE FILE> [<LOCAL FILE>]
@@ -435,9 +458,7 @@ class MpFileShell(cmd.Cmd):
             if not s_args:
                 return
             elif len(s_args) > 2:
-                self.__error(
-                    "Only one ore two arguments allowed: <REMOTE FILE> [<LOCAL FILE>]"
-                )
+                self.__error("Only one ore two arguments allowed: <REMOTE FILE> [<LOCAL FILE>]")
                 return
 
             rfile_name = s_args[0]
@@ -451,6 +472,8 @@ class MpFileShell(cmd.Cmd):
                 self.fe.get(rfile_name, lfile_name)
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def do_mget(self, args):
         """mget <SELECTION REGEX>
@@ -469,6 +492,8 @@ class MpFileShell(cmd.Cmd):
                 self.fe.mget(os.getcwd(), args, True)
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def complete_get(self, *args):
 
@@ -503,6 +528,8 @@ class MpFileShell(cmd.Cmd):
                 self.__error(str(e))
             except PyboardError:
                 self.__error("Unable to send request to %s" % self.fe.sysname)
+            except Exception as e:
+                print(e)
 
     def do_mrm(self, args):
         """mrm <SELECTION REGEX>
@@ -520,6 +547,8 @@ class MpFileShell(cmd.Cmd):
                 self.fe.mrm(args, True)
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def complete_rm(self, *args):
 
@@ -530,8 +559,11 @@ class MpFileShell(cmd.Cmd):
 
         return [i for i in files if i.startswith(args[0])]
 
+    def do_c(self, args):
+        self.do_cat(args)
+
     def do_cat(self, args):
-        """cat <REMOTE FILE>
+        """cat(c) <REMOTE FILE>
         Print the contents of a remote file.
         """
 
@@ -550,20 +582,109 @@ class MpFileShell(cmd.Cmd):
                 print(self.fe.gets(s_args[0]))
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     complete_cat = complete_get
 
+    def do_rf(self, args):
+        self.do_runfile(args)
+
+    def do_runfile(self, args):
+        """runfile(rf) <LOCAL FILE>
+        download and running local file in board.
+        """
+
+        if not len(args):
+            self.__error("Missing arguments: <LOCAL FILE>")
+
+        elif self.__is_open():
+
+            s_args = self.__parse_file_names(args)
+            if not s_args:
+                return
+            elif len(s_args) > 1:
+                self.__error("Only one ore one arguments allowed: <LOCAL FILE> ")
+                return
+
+            lfile_name = s_args[0]
+
+            try:
+                self.fe.put(lfile_name, lfile_name)
+                self.do_ef(args)
+            except IOError as e:
+                self.__error(str(e))
+            except Exception as e:
+                print(e)
+
+    def do_ef(self, args):
+        self.do_execfile(args)
+
+    def do_execfile(self, args):
+        """execfile(ef) <REMOTE FILE>
+        Execute a Python filename on remote.
+        """
+        if self.__is_open():
+            try:
+                self.do_exec("exec(open('%s').read())" % args)
+                # ret = self.fe.follow(2)
+                # if len(ret[-1]):
+                #     self.__error(str(ret[-1].decode('utf-8')))
+            except KeyboardInterrupt as e:
+                self.fe.keyboard_interrupt()
+                print(e)
+            except PyboardError as e:
+                print(e)
+            except Exception as e:
+                print(e)
+            finally:
+                if (self.open_args.startswith("ser:")):
+                    self.__reconnect()
+                if (self.__is_open()):
+                    self.fe.enter_raw_repl()
+
+    def do_lef(self, args):
+        self.do_lexecfile(args)
+
+    def do_lexecfile(self, args):
+        """execfile(ef) <LOCAL FILE>
+        Execute a Python filename on local.
+        """
+        if self.__is_open():
+
+            s_args = self.__parse_file_names(args)
+            if not s_args:
+                return
+            elif len(s_args) > 1:
+                self.__error("Only one ore one arguments allowed: <LOCAL FILE> ")
+                return
+
+            lfile_name = s_args[0]
+
+            try:
+                self.fe.put(lfile_name, lfile_name)
+
+                self.do_repl("exec(open('{0}').read())\r\n".format(args))
+
+            except IOError as e:
+                self.__error(str(e))
+            except Exception as e:
+                print(e)
+
+    def do_e(self, args):
+        self.do_exec(args)
+
     def do_exec(self, args):
-        """exec <STATEMENT>
-        Execute a Python statement on remote.
+        """exec(e) <Python CODE>
+        Execute a Python CODE on remote.
         """
 
         def data_consumer(data):
-            data = str(data.decode("utf-8"))
+            data = str(data.decode('utf-8'))
             sys.stdout.write(data.strip("\x04"))
 
         if not len(args):
-            self.__error("Missing argument: <STATEMENT>")
+            self.__error("Missing argument: <Python CODE>")
         elif self.__is_open():
 
             try:
@@ -571,15 +692,20 @@ class MpFileShell(cmd.Cmd):
                 ret = self.fe.follow(None, data_consumer)
 
                 if len(ret[-1]):
-                    self.__error(ret[-1])
-
+                    self.__error(str(ret[-1].decode('utf-8')))
+                    
             except IOError as e:
                 self.__error(str(e))
             except PyboardError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
+
+    def do_r(self, args):
+        self.do_repl(args)
 
     def do_repl(self, args):
-        """repl
+        """repl(r)
         Enter Micropython REPL.
         """
 
@@ -588,9 +714,7 @@ class MpFileShell(cmd.Cmd):
         ver = serial.VERSION.split(".")
 
         if int(ver[0]) < 2 or (int(ver[0]) == 2 and int(ver[1]) < 7):
-            self.__error(
-                "REPL needs PySerial version >= 2.7, found %s" % serial.VERSION
-            )
+            self.__error("REPL needs PySerial version >= 2.7, found %s" % serial.VERSION)
             return
 
         if self.__is_open():
@@ -598,17 +722,16 @@ class MpFileShell(cmd.Cmd):
             if self.repl is None:
 
                 from mp.term import Term
-
                 self.repl = Term(self.fe.con)
 
                 if platform.system() == "Windows":
                     self.repl.exit_character = chr(0x11)
                 else:
-                    self.repl.exit_character = chr(0x1D)
+                    self.repl.exit_character = chr(0x1d)
 
                 self.repl.raw = True
-                self.repl.set_rx_encoding("UTF-8")
-                self.repl.set_tx_encoding("UTF-8")
+                self.repl.set_rx_encoding('UTF-8')
+                self.repl.set_tx_encoding('UTF-8')
 
             else:
                 self.repl.serial = self.fe.con
@@ -622,15 +745,14 @@ class MpFileShell(cmd.Cmd):
                 print("\n*** Exit REPL with Ctrl+] ***")
 
             try:
+                if args != None:
+                    self.fe.con.write(bytes(args, encoding="utf8"))
                 self.repl.join(True)
-            except Exception:
+            except Exception as e:
+                # print(e)
                 pass
 
             self.repl.console.cleanup()
-
-            if self.caching:
-                # Clear the file explorer cache so we can see any new files.
-                self.fe.cache = {}
 
             self.fe.setup()
             print("")
@@ -656,162 +778,83 @@ class MpFileShell(cmd.Cmd):
                 self.fe.mpy_cross(s_args[0])
             except IOError as e:
                 self.__error(str(e))
+            except Exception as e:
+                print(e)
 
     def complete_mpyc(self, *args):
-        files = [
-            o
-            for o in os.listdir(".")
-            if (os.path.isfile(os.path.join(".", o)) and o.endswith(".py"))
-        ]
+        files = [o for o in os.listdir(".") if (os.path.isfile(os.path.join(".", o)) and o.endswith(".py"))]
         return [i for i in files if i.startswith(args[0])]
-
-    def do_putc(self, args):
-        """mputc <LOCAL PYTHON FILE> [<REMOTE FILE>]
-        Compile a Python file into byte-code by using mpy-cross (which needs to be in the
-        path) and upload it. The compiled file has the same name as the original file but
-        with extension '.mpy' by default.
-        """
-        if not len(args):
-            self.__error("Missing arguments: <LOCAL FILE> [<REMOTE FILE>]")
-
-        elif self.__is_open():
-            s_args = self.__parse_file_names(args)
-            if not s_args:
-                return
-            elif len(s_args) > 2:
-                self.__error(
-                    "Only one ore two arguments allowed: <LOCAL FILE> [<REMOTE FILE>]"
-                )
-                return
-
-            lfile_name = s_args[0]
-
-            if len(s_args) > 1:
-                rfile_name = s_args[1]
-            else:
-                rfile_name = (lfile_name[:lfile_name.rfind(".")] if "." in lfile_name else lfile_name) + ".mpy"
-
-            _, tmp = tempfile.mkstemp()
-
-            try:
-                self.fe.mpy_cross(src=lfile_name, dst=tmp)
-                self.fe.put(tmp, rfile_name)
-            except IOError as e:
-                self.__error(str(e))
-
-            os.unlink(tmp)
-    complete_putc = complete_mpyc
 
 
 def main():
-
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-c",
-        "--command",
-        help="execute given commands (separated by ;)",
-        default=None,
-        nargs="*",
-    )
-    parser.add_argument(
-        "-s", "--script", help="execute commands from file", default=None
-    )
-    parser.add_argument(
-        "-n",
-        "--noninteractive",
-        help="non interactive mode (don't enter shell)",
-        action="store_true",
-        default=False,
-    )
+    parser.add_argument("-c", "--command", help="execute given commands (separated by ;)", default=None, nargs="*")
+    parser.add_argument("-s", "--script", help="execute commands from file", default=None)
+    parser.add_argument("-n", "--noninteractive", help="non interactive mode (don't enter shell)",
+                        action="store_true", default=False)
 
-    parser.add_argument(
-        "--nocolor", help="disable color", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--nocache", help="disable cache", action="store_true", default=False
-    )
+    parser.add_argument("--nocolor", help="disable color", action="store_true", default=False)
+    parser.add_argument("--nocache", help="disable cache", action="store_true", default=False)
+    parser.add_argument("--nohelp", help="disable help", action="store_true", default=False)
 
     parser.add_argument("--logfile", help="write log to file", default=None)
-    parser.add_argument(
-        "--loglevel",
-        help="loglevel (CRITICAL, ERROR, WARNING, INFO, DEBUG)",
-        default="INFO",
-    )
+    parser.add_argument("--loglevel", help="loglevel (CRITICAL, ERROR, WARNING, INFO, DEBUG)", default="INFO")
 
-    parser.add_argument(
-        "--reset",
-        help="hard reset device via DTR (serial connection only)",
-        action="store_true",
-        default=False,
-    )
+    parser.add_argument("--reset", help="hard reset device via DTR (serial connection only)", action="store_true",
+                        default=False)
 
-    parser.add_argument(
-        "-o",
-        "--open",
-        help="directly opens board",
-        metavar="BOARD",
-        action="store",
-        default=None,
-    )
-    parser.add_argument(
-        "board", help="directly opens board", nargs="?", action="store", default=None
-    )
+    parser.add_argument("-o", "--open", help="directly opens board", metavar="BOARD", action="store", default=None)
+    parser.add_argument("board", help="directly opens board", nargs="?", action="store", default=None)
 
     args = parser.parse_args()
 
-    format = "%(asctime)s\t%(levelname)s\t%(message)s"
+    format = '%(asctime)s\t%(levelname)s\t%(message)s'
 
     if args.logfile is not None:
         logging.basicConfig(format=format, filename=args.logfile, level=args.loglevel)
     else:
         logging.basicConfig(format=format, level=logging.CRITICAL)
 
-    logging.info("Micropython File Shell v%s started" % version.FULL)
-    logging.info(
-        "Running on Python %d.%d using PySerial %s"
-        % (sys.version_info[0], sys.version_info[1], serial.VERSION)
-    )
+    logging.info('Micropython File Shell v%s started' % version.FULL)
+    logging.info('Running on Python %d.%d using PySerial %s' \
+                 % (sys.version_info[0], sys.version_info[1], serial.VERSION))
 
-    mpfs = MpFileShell(not args.nocolor, not args.nocache, args.reset)
+    mpfs = MpFileShell(not args.nocolor, not args.nocache, args.reset, args.nohelp)
 
     if args.open is not None:
         if args.board is None:
             mpfs.do_open(args.open)
         else:
-            print(
-                "Positional argument ({}) takes precedence over --open.".format(
-                    args.board
-                )
-            )
+            print("Positional argument ({}) takes precedence over --open.".format(args.board))
     if args.board is not None:
         mpfs.do_open(args.board)
 
     if args.command is not None:
 
-        for acmd in " ".join(args.command).split(";"):
-            scmd = acmd.strip()
-            if len(scmd) > 0 and not scmd.startswith("#"):
+        for cmd in ' '.join(args.command).split(';'):
+            scmd = cmd.strip()
+            if len(scmd) > 0 and not scmd.startswith('#'):
                 mpfs.onecmd(scmd)
 
     elif args.script is not None:
 
-        f = open(args.script, "r")
+        f = open(args.script, 'r')
         script = ""
 
         for line in f:
 
             sline = line.strip()
 
-            if len(sline) > 0 and not sline.startswith("#"):
-                script += sline + "\n"
+            if len(sline) > 0 and not sline.startswith('#'):
+                script += sline + '\n'
 
         if sys.version_info < (3, 0):
-            sys.stdin = io.StringIO(script.decode("utf-8"))
+            sys.stdin = io.StringIO(script.decode('utf-8'))
         else:
             sys.stdin = io.StringIO(script)
 
-        mpfs.intro = ""
-        mpfs.prompt = ""
+        mpfs.intro = ''
+        mpfs.prompt = ''
 
     if not args.noninteractive:
 
@@ -819,8 +862,9 @@ def main():
             mpfs.cmdloop()
         except KeyboardInterrupt:
             print("")
+        except Exception as e:
+            print(e)
 
 
-if __name__ == "__main__":
-
+if __name__ == '__main__':
     main()

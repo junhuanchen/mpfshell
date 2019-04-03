@@ -23,16 +23,17 @@
 ##
 
 
-import logging
+import websocket
 import threading
 import time
-from collections import deque
+import logging
 
-import websocket
+from collections import deque
 from mp.conbase import ConBase, ConError
 
 
 class ConWebsock(ConBase, threading.Thread):
+
     def __init__(self, ip, password):
 
         ConBase.__init__(self)
@@ -44,25 +45,25 @@ class ConWebsock(ConBase, threading.Thread):
         self.fifo_lock = threading.Lock()
 
         # websocket.enableTrace(logging.root.getEffectiveLevel() < logging.INFO)
-        self.ws = websocket.WebSocketApp(
-            "ws://%s:8266" % ip,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close,
-        )
+        self.ws = websocket.WebSocketApp("ws://%s:8266" % ip,
+                                         on_message=self.on_message,
+                                         on_error=self.on_error,
+                                         on_close=self.on_close)
 
         self.start()
 
-        self.timeout = 5.0
+        self.timeout = 10.0
 
-        if b"Password:" in self.read(10, blocking=False):
+        if b'Password:' in self.read(10, blocking=False):
             self.ws.send(password + "\r")
-            if b"WebREPL connected" not in self.read(25, blocking=False):
+            if not b'WebREPL connected' in self.read(25, blocking=False):
+                print("\nWebREPL Password Error")
                 raise ConError()
         else:
+            print("\nWebREPL Remote IP does not respond, check belong to the same network.")
             raise ConError()
 
-        self.timeout = 1.0
+        self.timeout = 5.0
 
         logging.info("websocket connected to ws://%s:8266" % ip)
 
@@ -72,7 +73,7 @@ class ConWebsock(ConBase, threading.Thread):
     def __del__(self):
         self.close()
 
-    def on_message(self, ws, message):
+    def on_message(self, message):
         self.fifo.extend(message)
 
         try:
@@ -80,7 +81,7 @@ class ConWebsock(ConBase, threading.Thread):
         except:
             pass
 
-    def on_error(self, ws, error):
+    def on_error(self, error):
         logging.error("websocket error: %s" % error)
 
         try:
@@ -88,7 +89,7 @@ class ConWebsock(ConBase, threading.Thread):
         except:
             pass
 
-    def on_close(self, ws):
+    def on_close(self):
         logging.info("websocket closed")
 
         try:
@@ -114,7 +115,7 @@ class ConWebsock(ConBase, threading.Thread):
 
     def read(self, size=1, blocking=True):
 
-        data = ""
+        data = ''
 
         tstart = time.time()
 
